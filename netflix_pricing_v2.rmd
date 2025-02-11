@@ -1,0 +1,421 @@
+---
+title: "netflix_pricing"
+output: html_document
+date: "2024-10-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Load dataset
+
+```{r}
+data = read.csv('Dataset_sub.csv')
+```
+
+## Visualization
+
+```{r}
+library(dplyr)
+
+subregion_means <- data %>%
+  group_by(Subregion) %>%
+  summarise(mean_library_size = mean(Total.Library.Size, na.rm = TRUE))
+
+subregion_means
+```
+
+```{r}
+cost_means <- data %>%
+  group_by(Subregion) %>%
+  summarise(mean_cost = mean(Cost, na.rm = TRUE))
+
+cost_means
+```
+
+```{r}
+#install.packages("rworldmap")
+```
+```{r}
+library(rworldmap)
+
+subregion_means <- data %>%
+  group_by(Subregion) %>%
+  summarise(mean_library_size = mean(Total.Library.Size, na.rm = TRUE))
+
+data_merged <- data %>%
+  left_join(subregion_means, by = "Subregion")
+
+sPDF <- joinCountryData2Map(data_merged, joinCode = "NAME", nameJoinColumn = "Country")
+
+mapCountryData(sPDF, nameColumnToPlot = "mean_library_size", 
+               mapTitle = "Heatmap of Total.Library.Size by Subregion", 
+               colourPalette = "heat", oceanCol = "lightblue", 
+               missingCountryCol = "lightgrey")
+
+```
+
+```{r}
+sPDF <- joinCountryData2Map(data, joinCode = "NAME", nameJoinColumn = "Country")
+
+mapCountryData(sPDF, nameColumnToPlot = "Total.Library.Size", 
+               mapTitle = "Heatmap of Library Size by Country", 
+               colourPalette = "heat", oceanCol = "white", 
+               missingCountryCol = "lightgrey")
+```
+
+
+```{r}
+library(rworldmap)
+
+data_merged <- data_merged %>%
+  left_join(cost_means, by = "Subregion")
+
+cPDF <- joinCountryData2Map(data_merged, joinCode = "NAME", nameJoinColumn = "Country")
+
+mapCountryData(cPDF, nameColumnToPlot = "mean_cost", 
+               mapTitle = "Heatmap of cost by Subregion", 
+               colourPalette = "heat", oceanCol = "lightblue", 
+               missingCountryCol = "lightgrey")
+```
+```{r}
+sPDF <- joinCountryData2Map(data, joinCode = "NAME", nameJoinColumn = "Country")
+
+mapCountryData(sPDF, nameColumnToPlot = "Cost", 
+               mapTitle = "Heatmap of Cost by Country", 
+               colourPalette = "heat", oceanCol = "white", 
+               missingCountryCol = "lightgrey")
+```
+
+```{r}
+# Calculate the differences between mean and actual data by region
+lib_est <- data_merged %>%
+  mutate(residuals = Total.Library.Size - mean_library_size)
+
+summary(lib_est$residuals)
+```
+
+
+## Modeling
+
+```{r}
+cost_vars <- data %>%
+  select(-Country, -X) %>%
+  mutate(
+    log_g2020 = log(g2020),
+    log_g2021 = log(g2021),
+    log_g2022 = log(g2022),
+    log_g2023 = log(g2023),
+    log_p2020 = log(p2020),
+    log_p2021 = log(p2021),
+    log_p2022 = log(p2022),
+    log_p2023 = log(p2023)
+  ) %>%
+  select(-g2020, -g2021, -g2022, -g2023, -p2020, -p2021, -p2022, -p2023) %>%
+  na.omit()
+```
+
+```{r}
+ind_vars <- data %>%
+  select(-Country, -X, -Cost) %>%
+  mutate(
+    log_g2020 = log(g2020),
+    log_g2021 = log(g2021),
+    log_g2022 = log(g2022),
+    log_g2023 = log(g2023),
+    log_p2020 = log(p2020),
+    log_p2021 = log(p2021),
+    log_p2022 = log(p2022),
+    log_p2023 = log(p2023)
+  ) %>%
+  select(-g2020, -g2021, -g2022, -g2023, -p2020, -p2021, -p2022, -p2023) %>%
+  na.omit()
+```
+
+```{r}
+# Specify the columns to convert
+cols_to_convert <- c("log_g2020", "log_g2021", "log_g2022", "log_g2023", "Educ_index", "Freedom_index", "log_p2020", "log_p2021", "log_p2022", "log_p2023", "Immi_perc", "penetration.rate", "u2020", "u2021", "u2022", "u2023", "m2020", "m2021", "m2022", "m2023")
+
+# Convert specified columns to numeric
+ind_vars[cols_to_convert] <- lapply(ind_vars[cols_to_convert], as.numeric)
+
+```
+
+
+```{r}
+model2 = lm(Total.Library.Size~., data=ind_vars)
+summary(model2)
+```
+
+```{r}
+# Linear Regression
+library(caret)
+
+set.seed(123)
+
+# K-fold
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+model2 <- train(Total.Library.Size~., 
+                data = ind_vars, 
+                method = "lm", 
+                trControl = train_control)
+
+print(model2)
+```
+```{r}
+# LASSO
+library(caret)
+library(glmnet)  # glmnet is needed for Lasso
+
+# Set random seed for reproducibility
+set.seed(123)
+
+# Define K-fold cross-validation settings
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Train Lasso regression model
+model_lasso <- train(Total.Library.Size ~ ., 
+                     data = ind_vars, 
+                     method = "glmnet", 
+                     trControl = train_control,
+                     tuneGrid = expand.grid(alpha = 1,  # Lasso (alpha = 1)
+                                            lambda = seq(2, 5, length = 10)))  # Range of lambda
+
+# Output the Lasso model results
+print(model_lasso)
+```
+
+
+```{r}
+best_lambda <- model_lasso$bestTune$lambda
+
+lasso_coefficients <- coef(model_lasso$finalModel, s = best_lambda)
+
+important_vars <- lasso_coefficients[lasso_coefficients[, 1] != 0, ]
+important_vars
+```
+
+```{r}
+# Random forest
+library(randomForest)
+
+# Set up 10-fold cross-validation
+train_control = trainControl(method = "cv", number = 10)
+
+model_rf <- train(Total.Library.Size~., 
+                data = ind_vars, 
+                method = "rf", 
+                trControl = train_control,
+                ntree=500)
+
+# View cross-validation results
+print(model_rf)
+```
+
+```{r}
+# CART
+# install.packages("rpart")
+library(rpart)
+
+# Set a seed for reproducibility
+set.seed(123)
+
+# Define K-fold cross-validation settings
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Train the CART model
+cart_model <- train(Total.Library.Size ~ ., 
+                    data = ind_vars, 
+                    method = "rpart", 
+                    trControl = train_control)
+
+# Print the model summary
+print(cart_model)
+```
+
+```{r}
+# KNN
+# Load necessary libraries
+library(caret)
+
+# Set random seed for reproducibility
+set.seed(123)
+
+# Define K-fold cross-validation settings
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Define the grid for tuning the number of neighbors (k)
+tune_grid <- expand.grid(k = seq(1, 10, by = 2))  # Try k values from 3 to 15
+
+# Train kNN model
+model_knn <- train(Total.Library.Size ~ ., 
+                   data = ind_vars, 
+                   method = "knn", 
+                   trControl = train_control,
+                   tuneGrid = tune_grid)
+
+# Output the kNN model results
+print(model_knn)
+```
+## Predicting
+
+```{r}
+# load data
+china_ob = read.csv('Predict_China.csv')
+china_data = china_ob %>%
+             select(-X, -Country) %>%
+              mutate(
+                log_g2020 = log(g2020),
+                log_g2021 = log(g2021),
+                log_g2022 = log(g2022),
+                log_g2023 = log(g2023),
+                log_p2020 = log(p2020),
+                log_p2021 = log(p2021),
+                log_p2022 = log(p2022),
+                log_p2023 = log(p2023)
+              ) %>%
+              select(-g2020, -g2021, -g2022, -g2023, -p2020, -p2021, -p2022, -p2023) %>%
+              na.omit()
+
+# Specify the columns to convert
+cols_to_convert <- c("log_g2020", "log_g2021", "log_g2022", "log_g2023", "Educ_index", "Freedom_index", "log_p2020", "log_p2021", "log_p2022", "log_p2023", "Immi_perc", "penetration.rate", "u2020", "u2021", "u2022", "u2023", "m2020", "m2021", "m2022", "m2023")
+
+# Convert specified columns to numeric
+china_data[cols_to_convert] <- lapply(china_data[cols_to_convert], as.numeric)
+```
+
+```{r}
+#  Extract the optimal lambda value
+optimal_lambda <- model_lasso$bestTune$lambda
+print(paste("Optimal Lambda: ", optimal_lambda))
+
+# Make predictions
+predictions <- predict(model_lasso, china_data, s = optimal_lambda)
+# Convert predictions to a vector if needed
+predictions_vector <- as.vector(predictions)
+# Print the predictions
+print(predictions_vector)
+```
+## Pirce modeling
+
+```{r}
+china_data$Total.Library.Size = predictions_vector
+china_data$Cost = NA
+```
+
+```{r}
+# Linear Regression
+library(caret)
+
+set.seed(123)
+
+# K-fold
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+model2_cost <- train(Cost ~ .,
+                data = cost_vars, 
+                method = "lm", 
+                trControl = train_control)
+
+print(model2_cost)
+
+```
+
+
+```{r}
+# LASSO
+library(caret)
+library(glmnet)  # glmnet is needed for Lasso
+
+# Set random seed for reproducibility
+set.seed(123)
+
+# Define K-fold cross-validation settings
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Train Lasso regression model
+model_lasso_cost <- train(Cost ~ ., 
+                     data = cost_vars, 
+                     method = "glmnet", 
+                     trControl = train_control,
+                     tuneGrid = expand.grid(alpha = 1,  # Lasso (alpha = 1)
+                                            lambda = seq(0.01, 0.15, length = 10)))  # Range of lambda
+
+# Output the Lasso model results
+print(model_lasso_cost)
+```
+
+
+```{r}
+best_lambda_cost <- model_lasso_cost$bestTune$lambda
+
+lasso_coefficients_cost <- coef(model_lasso_cost$finalModel, s = best_lambda_cost)
+
+important_vars_cost <- lasso_coefficients_cost[lasso_coefficients_cost[, 1] != 0, ]
+print(important_vars_cost)
+```
+
+
+```{r}
+library(randomForest)
+
+# Set up 10-fold cross-validation
+train_control = trainControl(method = "cv", number = 10)
+
+model_rf_cost <- train(Cost~., 
+                data = cost_vars, 
+                method = "rf", 
+                trControl = train_control,
+                ntree=500)
+
+# View cross-validation results
+print(model_rf_cost)
+```
+```{r}
+# KNN
+# Load necessary libraries
+library(caret)
+
+# Set random seed for reproducibility
+set.seed(123)
+
+# Define K-fold cross-validation settings
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Define the grid for tuning the number of neighbors (k)
+tune_grid <- expand.grid(k = seq(15, 39, by = 2))  # Try k values from 3 to 15
+
+# Train kNN model
+model_knn_cost <- train(Cost ~ ., 
+                   data = cost_vars, 
+                   method = "knn", 
+                   trControl = train_control,
+                   tuneGrid = tune_grid)
+
+# Output the kNN model results
+print(model_knn_cost)
+```
+
+
+```{r}
+optimal_lambda_cost <- model_lasso_cost$bestTune$lambda
+print(paste("Optimal Lambda: ", optimal_lambda_cost))
+
+# Make predictions
+predictions_cost <- predict(model_lasso_cost, china_data, s = optimal_lambda_cost)
+# Convert predictions to a vector if needed
+predictions_vector_cost <- as.vector(predictions_cost)
+# Print the predictions
+print(predictions_vector_cost)
+```
+
